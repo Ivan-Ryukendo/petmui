@@ -1,0 +1,10 @@
+/target/
+*.pdb
+*.exe
+config.toml
+AGENTS.md
+pets/
+github-artifacts/
+github-artifacts-latest/
+release-artifacts-*/
+__pycache__/

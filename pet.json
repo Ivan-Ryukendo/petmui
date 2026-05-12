@@ -1,0 +1,29 @@
+{
+  "name": "Pocket Agent",
+  "version": "0.1.0",
+  "cellWidth": 96,
+  "cellHeight": 96,
+  "externalPackageFormat": {
+    "renderer": "raw-bgra-atlas-v1",
+    "manifest": "pet.json",
+    "atlas": "atlas.bgra",
+    "description": "External packages may place pet.json and a raw BGRA atlas in the configured pet_directory. The atlas is 32-bit BGRA pixels laid out left-to-right frames by top-to-bottom named rows."
+  },
+  "states": [
+    "idle",
+    "typing",
+    "agent_working",
+    "agent_success",
+    "agent_failed",
+    "music_playing",
+    "music_paused",
+    "gaming",
+    "sleeping"
+  ],
+  "renderer": "built-in-procedural-v1",
+  "privacy": {
+    "recordsText": false,
+    "recordsScreenshots": false,
+    "networkByDefault": false
+  }
+}

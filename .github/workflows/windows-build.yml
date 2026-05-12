@@ -1,0 +1,51 @@
+name: Windows Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Windows release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Check Rust
+        run: cargo check --locked
+
+      - name: Check Python tools
+        run: python -m py_compile tools/convert_hatch_pet.py
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Collect package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist
+          Copy-Item target/release/lightweight_desktop_pet.exe dist/pet.exe
+          Copy-Item pet.json dist/pet.json
+          Copy-Item config.example.toml dist/config.example.toml
+          Copy-Item README.md dist/README.md
+          New-Item -ItemType Directory -Force dist/tools
+          Copy-Item tools/convert_hatch_pet.py dist/tools/convert_hatch_pet.py
+          Get-FileHash dist/pet.exe -Algorithm SHA256 | ForEach-Object { "$($_.Hash)  pet.exe" } | Set-Content dist/SHA256SUMS.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lightweight-desktop-pet-windows
+          path: dist/**
+          retention-days: 14

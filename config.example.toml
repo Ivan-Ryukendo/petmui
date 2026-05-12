@@ -1,0 +1,46 @@
+# Copy to config.toml next to pet.exe to customize detection.
+
+# Window size in physical pixels.
+pet_size = 96
+
+# Optional external pet package directory. Relative paths are resolved from
+# this config.toml file when possible. If loading fails, the built-in pet is used.
+# pet_directory = "pets/default"
+
+# Privacy control. When false, the app will not install the low-level keyboard
+# hook and will only use Windows idle/activity timing.
+enable_typing_detection = true
+
+# Game overlay control. When a configured game is foreground, the pet becomes
+# click-through so it can stay visible without catching FPS/game mouse input.
+click_through_in_games = true
+
+# Seconds before recent input becomes idle.
+typing_timeout_seconds = 2
+
+# Seconds before no input becomes sleeping.
+sleep_timeout_seconds = 300
+
+# Processes treated as coding-agent or coding-tool activity.
+agent_processes = [
+  "codex.exe",
+  "claude.exe",
+  "cursor.exe",
+  "code.exe",
+  "powershell.exe",
+  "WindowsTerminal.exe",
+]
+
+# Processes treated as games. Add your game exe names here.
+game_processes = [
+  "steam.exe",
+  "RobloxPlayerBeta.exe",
+  "Minecraft.Windows.exe",
+]
+
+# Offline music fallback. Pear Desktop is a YouTube Music desktop client, and
+# Spotify OAuth can still be added later without changing the pet state resolver.
+music_processes = [
+  "pear-desktop.exe",
+  "spotify.exe",
+]
