@@ -1,4 +1,7 @@
 /target/
+.agents/
+.codex/
+.planning/
 *.pdb
 *.exe
 config.toml

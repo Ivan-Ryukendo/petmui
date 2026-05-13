@@ -1,6 +1,6 @@
 # petmui Beta
 
-petmui is a tiny Windows-first desktop pet app. It runs offline by default, shows a transparent always-on-top pet window, reacts to foreground activity, and exposes a tray menu for pause, hide/show, reload, settings, and exit.
+petmui is a tiny Windows-first desktop pet app. It runs offline by default, shows a transparent always-on-top pet window, reacts to foreground activity, and exposes a tray menu plus a small Settings window for pause, hide/show, reload, local imports, and folder access.
 
 Status: **beta / pre-release**. Builds are published as pre-release versions until the app is stable enough for `v1.0.0`.
 
@@ -22,16 +22,17 @@ For local testing:
 cargo run
 ```
 
-## What v0.1 Does
+## What The Current Beta Does
 
 - Draws a transparent desktop pet using raw Win32 APIs and no runtime framework.
 - Lets you drag the pet around the desktop.
 - Adds a tray icon with pause, hide/show, reload pet, settings folder, pets folder, import folder, and exit actions.
+- Adds a native Settings window for pause/hide/reload, opening local folders, and importing staged pet sources.
 - Detects recent input without recording typed text.
 - Detects foreground coding-agent/tool processes, game processes, and offline music processes, including Pear Desktop/YouTube Music by default.
 - Resolves states with simple priority: gaming, agent work, recent input, music, sleep, idle.
 - Reads an optional `config.toml` placed next to the executable.
-- Can load an optional external pet package from `pet_directory`, falling back to the built-in procedural pet if the package is missing or invalid.
+- Can load an optional local pet package from `pet_directory`, falling back to the built-in procedural pet if the package is missing or invalid.
 - Can switch into click-through overlay mode during configured games, so the pet does not capture mouse input.
 
 ## External Pet Packages
@@ -111,7 +112,7 @@ Then set:
 pet_directory = "pets/your-pet"
 ```
 
-To import a Codex pet and write a matching `config.toml` in one step:
+To import a Codex pet and write a matching `config.toml` in one step, place the converted package under the local `pets` folder:
 
 ```powershell
 python tools\convert_hatch_pet.py <path-to-codex-pet-folder> pets\your-pet --write-config config.toml
@@ -131,7 +132,18 @@ python tools\convert_hatch_pet.py --emoji "star" pets\star-pet --write-config co
 
 Emoji rendering uses Pillow and local fonts only. On Windows it tries Segoe UI Emoji first; if Pillow or the installed font cannot render a color emoji cleanly, save the emoji as an image from another local tool and use the `--static` image import path instead. No converter mode makes network calls.
 
-Do not commit local imported pets. The repository ignores `pets/` and `config.toml` so private/custom pets stay local.
+When `--write-config` is used, the converter expects output inside the local `pets` folder. The app also loads configured pet packages only from that local folder by default. Do not commit local imported pets. The repository ignores `pets/` and `config.toml` so private/custom pets stay local.
+
+The Settings window can import from the local staging folder without editing config manually:
+
+```text
+pets/imports/
+  my-source-pet/
+    pet.json
+    spritesheet.webp
+```
+
+Open **Settings...** from the tray, choose **Import Folder**, and petmui converts the first staged pet folder into a local package under `pets/`, updates only `pet_directory`, and reloads the pet. Static images can be staged in the same import folder and imported with **Import Image**. Emoji/text pets can be created directly from the Settings window. These UI imports call the local converter and do not enable typing detection. In the current beta, Settings imports require Python and Pillow to be installed locally; the pet itself still runs without them.
 
 State row selection prefers these names:
 
@@ -222,7 +234,7 @@ For best results, use ChatGPT to develop the character concept and Codex with `h
 
 ## Privacy
 
-The app does not record keystrokes, screenshots, clipboard contents, or network traffic. Keyboard detection is off by default; when `enable_typing_detection = true`, it only increments an in-memory counter from Windows key events so the pet can react to active typing. The keyboard hook is disabled while the pet is paused or hidden. Foreground process names and limited window titles are read locally for state detection and are not stored or transmitted. Spotify OAuth is intentionally not included in v0.1; music detection is offline process-based fallback.
+The app does not record keystrokes, screenshots, clipboard contents, or network traffic. Keyboard detection is off by default; when `enable_typing_detection = true`, it only increments an in-memory counter from Windows key events so the pet can react to active typing. The keyboard hook is disabled while the pet is paused or hidden. Foreground process names and limited window titles are read locally for state detection and are not stored or transmitted. Spotify OAuth is intentionally not included in the current beta; music detection is offline process-based fallback.
 
 For games, set `click_through_in_games = true` and add game executable names under `game_processes`. When one of those games is foreground, the pet stays visible but allows mouse input to pass through to the game.
 
@@ -241,7 +253,7 @@ See `ROADMAP.md` for the YouTube Music, gaming, and AI companion path.
 
 This project uses direct Win32 API calls. On the MSVC Rust target, release builds need Visual Studio Build Tools with the C++ workload and Windows SDK on `PATH`.
 
-If you do not want to install those locally, push the project to GitHub and run the `Windows Build` workflow from the Actions tab. It builds on GitHub's Windows runner and uploads a `lightweight-desktop-pet-windows` artifact containing `pet.exe`, `pet.json`, and `config.example.toml`.
+If you do not want to install those locally, push the project to GitHub and run the `Windows Build` workflow from the Actions tab. It builds on GitHub's Windows runner and uploads a `lightweight-desktop-pet-windows` artifact containing `pet.exe`, `pet.json`, `config.example.toml`, `README.md`, `tools/convert_hatch_pet.py`, and `SHA256SUMS.txt`.
 
 ## Releases
 

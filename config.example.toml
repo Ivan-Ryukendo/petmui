@@ -3,9 +3,9 @@
 # Window size in physical pixels.
 pet_size = 96
 
-# Optional external pet package directory. Relative paths are resolved from
-# this config.toml file when possible. If loading fails, the built-in pet is used.
-# The tray's Open Pets Folder and Open Import Folder actions create/open local folders.
+# Optional local pet package directory. Pet packages are loaded from the app-owned
+# pets folder by default. If loading fails, the built-in pet is used. The tray and
+# Settings window can create/open the pets and import folders.
 # pet_directory = "pets/default"
 
 # Privacy control. When false, the app will not install the low-level keyboard

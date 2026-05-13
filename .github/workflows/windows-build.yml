@@ -4,9 +4,11 @@ on:
   workflow_dispatch:
   push:
     branches: [main, master]
+    tags:
+      - 'v*-beta.*'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -28,6 +30,37 @@ jobs:
       - name: Check Python tools
         run: python -m py_compile tools/convert_hatch_pet.py
 
+      - name: Install Python test dependencies
+        run: python -m pip install pillow
+
+      - name: Test Python tools
+        run: python tools/test_convert_hatch_pet.py
+
+      - name: Privacy scan repository text
+        shell: pwsh
+        run: |
+          $patterns = @(
+            '[A-Za-z]:\\Users\\',
+            ('\.codex' + '\\pets'),
+            ('\.codex' + '/pets'),
+            'BEGIN (RSA |OPENSSH |EC |)PRIVATE KEY',
+            '(?i)(api[_-]?key|client[_-]?secret)\s*[:=]\s*["''][^"'']+["'']'
+          )
+          $excludedDirs = @('.git', 'target', 'dist', 'pets', '.planning')
+          $files = Get-ChildItem . -Recurse -File | Where-Object {
+            $_.Extension -in @('.txt', '.md', '.toml', '.json', '.py', '.ps1', '.yml', '.yaml', '.rs') -and
+            ($excludedDirs -notcontains $_.Directory.Name) -and
+            ($_.FullName -notlike '*\.github\workflows\windows-build.yml')
+          }
+          foreach ($file in $files) {
+            $text = Get-Content -Raw -LiteralPath $file.FullName
+            foreach ($pattern in $patterns) {
+              if ($text -match $pattern) {
+                throw "Repository privacy scan failed: $($file.FullName) matched $pattern"
+              }
+            }
+          }
+
       - name: Build
         run: cargo build --release --locked
 
@@ -47,12 +80,9 @@ jobs:
         shell: pwsh
         run: |
           $patterns = @(
-            'C:\\Users\\',
+            '[A-Za-z]:\\Users\\',
             '\.codex\\pets',
-            '\.codex/pets',
-            'E:\\',
-            'gamal',
-            'shefa'
+            '\.codex/pets'
           )
           $files = Get-ChildItem dist -Recurse -File | Where-Object {
             $_.Extension -in @('.txt', '.md', '.toml', '.json', '.py', '.ps1', '.yml', '.yaml')
@@ -72,3 +102,15 @@ jobs:
           name: lightweight-desktop-pet-windows
           path: dist/**
           retention-days: 14
+
+      - name: Publish beta pre-release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Compress-Archive -Path dist/* -DestinationPath petmui-windows.zip -Force
+          gh release create $env:GITHUB_REF_NAME petmui-windows.zip `
+            --title "$env:GITHUB_REF_NAME" `
+            --notes "Beta pre-release build from GitHub Actions. The package contains pet.exe, default assets, config example, README, converter tool, and SHA256 checksums." `
+            --prerelease

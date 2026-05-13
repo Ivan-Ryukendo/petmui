@@ -12,6 +12,7 @@ mod windows_app {
     use std::mem::{size_of, zeroed};
     use std::path::{Component, PathBuf};
     use std::ptr::{null, null_mut};
+    use std::process::Command;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, Instant};
 
@@ -34,6 +35,10 @@ mod windows_app {
     type Handle = *mut c_void;
 
     const WS_POPUP: Dword = 0x80000000;
+    const WS_CHILD: Dword = 0x40000000;
+    const WS_VISIBLE: Dword = 0x10000000;
+    const WS_OVERLAPPEDWINDOW: Dword = 0x00CF0000;
+    const WS_BORDER: Dword = 0x00800000;
     const WS_EX_LAYERED: Dword = 0x00080000;
     const WS_EX_TOPMOST: Dword = 0x00000008;
     const WS_EX_TOOLWINDOW: Dword = 0x00000080;
@@ -41,6 +46,7 @@ mod windows_app {
     const WS_EX_TRANSPARENT: Dword = 0x00000020;
 
     const WM_DESTROY: Uint = 0x0002;
+    const WM_CLOSE: Uint = 0x0010;
     const WM_TIMER: Uint = 0x0113;
     const WM_COMMAND: Uint = 0x0111;
     const WM_LBUTTONDOWN: Uint = 0x0201;
@@ -53,6 +59,7 @@ mod windows_app {
 
     const HTCAPTION: Wparam = 2;
     const SW_HIDE: i32 = 0;
+    const SW_SHOW: i32 = 5;
     const SW_SHOWNORMAL: i32 = 1;
     const SW_SHOWNOACTIVATE: i32 = 4;
     const SWP_NOSIZE: Uint = 0x0001;
@@ -78,6 +85,8 @@ mod windows_app {
     const MF_STRING: Uint = 0x0000;
     const MF_SEPARATOR: Uint = 0x0800;
     const MF_CHECKED: Uint = 0x0008;
+    const MB_OK: Uint = 0x00000000;
+    const ES_AUTOHSCROLL: Dword = 0x0080;
 
     const ID_TRAY_PAUSE: usize = 1001;
     const ID_TRAY_HIDE: usize = 1002;
@@ -86,6 +95,17 @@ mod windows_app {
     const ID_TRAY_PETS_FOLDER: usize = 1005;
     const ID_TRAY_IMPORTS_FOLDER: usize = 1006;
     const ID_TRAY_EXIT: usize = 1007;
+    const ID_SETTINGS_PAUSE: usize = 1101;
+    const ID_SETTINGS_HIDE: usize = 1102;
+    const ID_SETTINGS_RELOAD: usize = 1103;
+    const ID_SETTINGS_OPEN_SETTINGS: usize = 1104;
+    const ID_SETTINGS_OPEN_PETS: usize = 1105;
+    const ID_SETTINGS_OPEN_IMPORTS: usize = 1106;
+    const ID_SETTINGS_IMPORT_FOLDER: usize = 1107;
+    const ID_SETTINGS_IMPORT_IMAGE: usize = 1108;
+    const ID_SETTINGS_CREATE_EMOJI: usize = 1109;
+    const ID_SETTINGS_EMOJI_TEXT: usize = 1110;
+    const ID_SETTINGS_CURRENT: usize = 1111;
     const TIMER_RENDER: Wparam = 42;
 
     const WH_KEYBOARD_LL: i32 = 13;
@@ -103,6 +123,7 @@ mod windows_app {
     static KEY_EVENTS: AtomicU64 = AtomicU64::new(0);
     static mut APP: *mut App = null_mut();
     static mut KEYBOARD_HOOK: Hhook = null_mut();
+    static mut SETTINGS_HWND: Hwnd = null_mut();
 
     #[repr(C)]
     #[derive(Clone, Copy)]
@@ -255,6 +276,10 @@ mod windows_app {
         fn LoadCursorW(h_instance: Hinstance, lp_cursor_name: *const u16) -> Hcursor;
         fn SetForegroundWindow(hwnd: Hwnd) -> Bool;
         fn GetCursorPos(lp_point: *mut Point) -> Bool;
+        fn GetDlgItem(hwnd: Hwnd, n_id_dlg_item: i32) -> Hwnd;
+        fn GetDlgItemTextW(hwnd: Hwnd, n_id_dlg_item: i32, lp_string: *mut u16, cch_max: i32) -> Uint;
+        fn SetWindowTextW(hwnd: Hwnd, lp_string: *const u16) -> Bool;
+        fn MessageBoxW(hwnd: Hwnd, lp_text: *const u16, lp_caption: *const u16, u_type: Uint) -> i32;
         fn CreatePopupMenu() -> Hmenu;
         fn AppendMenuW(hmenu: Hmenu, u_flags: Uint, u_id_new_item: usize, lp_new_item: *const u16) -> Bool;
         fn TrackPopupMenu(hmenu: Hmenu, u_flags: Uint, x: i32, y: i32, n_reserved: i32, hwnd: Hwnd, prc_rect: *const Rect) -> Bool;
@@ -461,6 +486,21 @@ mod windows_app {
                 return;
             }
 
+            let settings_class = wide("PetmuiSettingsWindow");
+            let settings_wc = WndClassW {
+                style: 0,
+                lpfn_wnd_proc: Some(settings_wnd_proc),
+                cb_cls_extra: 0,
+                cb_wnd_extra: 0,
+                h_instance: hinstance,
+                h_icon: LoadIconW(null_mut(), 32512usize as *const u16),
+                h_cursor: LoadCursorW(null_mut(), 32512usize as *const u16),
+                hbr_background: 16usize as Hbrush,
+                lpsz_menu_name: null(),
+                lpsz_class_name: settings_class.as_ptr(),
+            };
+            RegisterClassW(&settings_wc);
+
             let config = load_config();
             let pet_package = load_pet_package(&config);
             let hwnd = CreateWindowExW(
@@ -640,6 +680,9 @@ mod windows_app {
             self.sync_keyboard_hook();
             self.sync_overlay_mode();
             self.render();
+            unsafe {
+                update_settings_status();
+            }
         }
 
         fn sync_keyboard_hook(&self) {
@@ -660,6 +703,17 @@ mod windows_app {
             self.click_through = should_click_through;
             unsafe {
                 set_click_through(self.hwnd, should_click_through);
+            }
+        }
+
+        unsafe fn show_settings_window(&mut self) {
+            if SETTINGS_HWND.is_null() {
+                SETTINGS_HWND = create_settings_window(self.hwnd);
+            }
+            if !SETTINGS_HWND.is_null() {
+                update_settings_status();
+                ShowWindow(SETTINGS_HWND, SW_SHOW);
+                SetForegroundWindow(SETTINGS_HWND);
             }
         }
     }
@@ -696,7 +750,7 @@ mod windows_app {
                         ID_TRAY_PAUSE => (*APP).toggle_pause(),
                         ID_TRAY_HIDE => (*APP).toggle_hidden(),
                         ID_TRAY_RELOAD => (*APP).reload_config_and_pet(),
-                        ID_TRAY_SETTINGS => open_settings_folder(hwnd),
+                        ID_TRAY_SETTINGS => (*APP).show_settings_window(),
                         ID_TRAY_PETS_FOLDER => open_pets_folder(hwnd),
                         ID_TRAY_IMPORTS_FOLDER => open_imports_folder(hwnd),
                         ID_TRAY_EXIT => {
@@ -714,6 +768,46 @@ mod windows_app {
                 0
             }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        }
+    }
+
+    unsafe extern "system" fn settings_wnd_proc(hwnd: Hwnd, msg: Uint, wparam: Wparam, _lparam: Lparam) -> Lresult {
+        match msg {
+            WM_COMMAND => {
+                let id = wparam & 0xffff;
+                if !APP.is_null() {
+                    match id {
+                        ID_SETTINGS_PAUSE => {
+                            (*APP).toggle_pause();
+                            update_settings_status();
+                        }
+                        ID_SETTINGS_HIDE => {
+                            (*APP).toggle_hidden();
+                            update_settings_status();
+                        }
+                        ID_SETTINGS_RELOAD => (*APP).reload_config_and_pet(),
+                        ID_SETTINGS_OPEN_SETTINGS => open_settings_folder(hwnd),
+                        ID_SETTINGS_OPEN_PETS => open_pets_folder(hwnd),
+                        ID_SETTINGS_OPEN_IMPORTS => open_imports_folder(hwnd),
+                        ID_SETTINGS_IMPORT_FOLDER => import_first_pet_folder(hwnd),
+                        ID_SETTINGS_IMPORT_IMAGE => import_first_image(hwnd),
+                        ID_SETTINGS_CREATE_EMOJI => create_emoji_pet(hwnd),
+                        _ => {}
+                    }
+                }
+                0
+            }
+            WM_CLOSE => {
+                ShowWindow(hwnd, SW_HIDE);
+                0
+            }
+            WM_DESTROY => {
+                if SETTINGS_HWND == hwnd {
+                    SETTINGS_HWND = null_mut();
+                }
+                0
+            }
+            _ => DefWindowProcW(hwnd, msg, wparam, _lparam),
         }
     }
 
@@ -986,8 +1080,8 @@ mod windows_app {
         let hidden = !APP.is_null() && (*APP).hidden;
         AppendMenuW(menu, MF_STRING | if paused { MF_CHECKED } else { 0 }, ID_TRAY_PAUSE, wide("Pause").as_ptr());
         AppendMenuW(menu, MF_STRING, ID_TRAY_HIDE, wide(if hidden { "Show" } else { "Hide" }).as_ptr());
+        AppendMenuW(menu, MF_STRING, ID_TRAY_SETTINGS, wide("Settings...").as_ptr());
         AppendMenuW(menu, MF_STRING, ID_TRAY_RELOAD, wide("Reload Pet").as_ptr());
-        AppendMenuW(menu, MF_STRING, ID_TRAY_SETTINGS, wide("Open Settings Folder").as_ptr());
         AppendMenuW(menu, MF_STRING, ID_TRAY_PETS_FOLDER, wide("Open Pets Folder").as_ptr());
         AppendMenuW(menu, MF_STRING, ID_TRAY_IMPORTS_FOLDER, wide("Open Import Folder").as_ptr());
         AppendMenuW(menu, MF_SEPARATOR, 0, null());
@@ -998,6 +1092,109 @@ mod windows_app {
         SetForegroundWindow(hwnd);
         TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, pt.x, pt.y, 0, hwnd, null());
         DestroyMenu(menu);
+    }
+
+    unsafe fn create_settings_window(owner: Hwnd) -> Hwnd {
+        let hwnd = CreateWindowExW(
+            WS_EX_TOOLWINDOW,
+            wide("PetmuiSettingsWindow").as_ptr(),
+            wide("petmui Settings").as_ptr(),
+            WS_OVERLAPPEDWINDOW,
+            180,
+            180,
+            430,
+            330,
+            owner,
+            null_mut(),
+            GetModuleHandleW(null()),
+            null_mut(),
+        );
+        if hwnd.is_null() {
+            return hwnd;
+        }
+
+        create_label(hwnd, ID_SETTINGS_CURRENT, "Current: built-in pet", 16, 16, 380, 22);
+        create_button(hwnd, ID_SETTINGS_PAUSE, "Pause / Resume", 16, 48, 120, 28);
+        create_button(hwnd, ID_SETTINGS_HIDE, "Hide / Show", 146, 48, 120, 28);
+        create_button(hwnd, ID_SETTINGS_RELOAD, "Reload Pet", 276, 48, 120, 28);
+        create_button(hwnd, ID_SETTINGS_OPEN_SETTINGS, "Settings Folder", 16, 88, 120, 28);
+        create_button(hwnd, ID_SETTINGS_OPEN_PETS, "Pets Folder", 146, 88, 120, 28);
+        create_button(hwnd, ID_SETTINGS_OPEN_IMPORTS, "Import Folder", 276, 88, 120, 28);
+        create_label(hwnd, 0, "Drop pet folders or images in pets\\imports, then import:", 16, 132, 380, 22);
+        create_button(hwnd, ID_SETTINGS_IMPORT_FOLDER, "Import Pet Folder", 16, 160, 180, 30);
+        create_button(hwnd, ID_SETTINGS_IMPORT_IMAGE, "Import Image", 216, 160, 180, 30);
+        create_label(hwnd, 0, "Emoji or short text:", 16, 210, 130, 22);
+        CreateWindowExW(
+            0,
+            wide("EDIT").as_ptr(),
+            wide("star").as_ptr(),
+            WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
+            146,
+            208,
+            160,
+            24,
+            hwnd,
+            ID_SETTINGS_EMOJI_TEXT as Hmenu,
+            GetModuleHandleW(null()),
+            null_mut(),
+        );
+        create_button(hwnd, ID_SETTINGS_CREATE_EMOJI, "Create Pet", 316, 206, 80, 28);
+        hwnd
+    }
+
+    unsafe fn create_button(parent: Hwnd, id: usize, text: &str, x: i32, y: i32, width: i32, height: i32) {
+        CreateWindowExW(
+            0,
+            wide("BUTTON").as_ptr(),
+            wide(text).as_ptr(),
+            WS_CHILD | WS_VISIBLE,
+            x,
+            y,
+            width,
+            height,
+            parent,
+            id as Hmenu,
+            GetModuleHandleW(null()),
+            null_mut(),
+        );
+    }
+
+    unsafe fn create_label(parent: Hwnd, id: usize, text: &str, x: i32, y: i32, width: i32, height: i32) {
+        CreateWindowExW(
+            0,
+            wide("STATIC").as_ptr(),
+            wide(text).as_ptr(),
+            WS_CHILD | WS_VISIBLE,
+            x,
+            y,
+            width,
+            height,
+            parent,
+            id as Hmenu,
+            GetModuleHandleW(null()),
+            null_mut(),
+        );
+    }
+
+    unsafe fn update_settings_status() {
+        if SETTINGS_HWND.is_null() || APP.is_null() {
+            return;
+        }
+        let current = (*APP)
+            .config
+            .pet_directory
+            .as_ref()
+            .map(|path| {
+                path.strip_prefix(app_base_dir())
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| "external path blocked".into())
+            })
+            .unwrap_or_else(|| "built-in pet".into());
+        let status = format!("Current: {} | State: {}", current, (*APP).state.label());
+        let label = GetDlgItem(SETTINGS_HWND, ID_SETTINGS_CURRENT as i32);
+        if !label.is_null() {
+            SetWindowTextW(label, wide(&status).as_ptr());
+        }
     }
 
     unsafe fn open_settings_folder(hwnd: Hwnd) {
@@ -1019,12 +1216,15 @@ mod windows_app {
 
     unsafe fn open_folder_in_explorer(hwnd: Hwnd, folder: PathBuf, create: bool) {
         if create && fs::create_dir_all(&folder).is_err() {
+            show_message(hwnd, "Could not create the requested folder.");
             return;
         }
         let Ok(folder) = folder.canonicalize() else {
+            show_message(hwnd, "Could not find the requested folder.");
             return;
         };
         if !folder.is_dir() {
+            show_message(hwnd, "The requested folder is not available.");
             return;
         }
         let operation = wide("open");
@@ -1040,6 +1240,186 @@ mod windows_app {
             cwd.as_ptr(),
             SW_SHOWNORMAL,
         );
+    }
+
+    unsafe fn import_first_pet_folder(hwnd: Hwnd) {
+        prepare_import_folders();
+        let Some(source) = find_first_import_pet_folder() else {
+            show_message(hwnd, "No pet folder found in the import folder.");
+            return;
+        };
+        let output = next_package_dir("imported-pet");
+        run_converter_and_reload(hwnd, &output, |cmd| {
+            cmd.arg(source).arg(&output);
+        });
+    }
+
+    unsafe fn import_first_image(hwnd: Hwnd) {
+        prepare_import_folders();
+        let Some(source) = find_first_import_image() else {
+            show_message(hwnd, "No image file found in the import folder.");
+            return;
+        };
+        let output = next_package_dir("image-pet");
+        run_converter_and_reload(hwnd, &output, |cmd| {
+            cmd.arg(source).arg(&output).arg("--static");
+        });
+    }
+
+    unsafe fn create_emoji_pet(hwnd: Hwnd) {
+        let text = read_control_text(hwnd, ID_SETTINGS_EMOJI_TEXT).trim().to_string();
+        if text.is_empty() {
+            show_message(hwnd, "Enter an emoji or short text first.");
+            return;
+        }
+        prepare_import_folders();
+        let output = next_package_dir("emoji-pet");
+        run_converter_and_reload(hwnd, &output, |cmd| {
+            cmd.arg("--emoji")
+                .arg(text)
+                .arg(&output);
+        });
+    }
+
+    unsafe fn run_converter_and_reload<F>(hwnd: Hwnd, package_dir: &PathBuf, add_args: F)
+    where
+        F: FnOnce(&mut Command),
+    {
+        let Some(script) = converter_script() else {
+            show_message(hwnd, "Converter tool was not found.");
+            return;
+        };
+        let mut cmd = Command::new("python");
+        cmd.arg(script);
+        add_args(&mut cmd);
+        match cmd.output() {
+            Ok(output) if output.status.success() => {
+                if !write_pet_directory_config(package_dir) {
+                    show_message(hwnd, "Pet imported, but config could not be updated.");
+                    return;
+                }
+                if !APP.is_null() {
+                    (*APP).reload_config_and_pet();
+                }
+                show_message(hwnd, "Pet imported and reloaded.");
+            }
+            Ok(_) => show_message(hwnd, "Import failed. Check the import source and Pillow installation."),
+            Err(_) => show_message(hwnd, "Import failed because Python could not run."),
+        }
+    }
+
+    fn write_pet_directory_config(package_dir: &PathBuf) -> bool {
+        let path = config_path();
+        let relative = package_dir
+            .strip_prefix(app_base_dir())
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| package_dir.to_string_lossy().replace('\\', "/"));
+        let line = format!("pet_directory = \"{}\"", relative.replace('"', "\\\""));
+        let text = fs::read_to_string(&path).unwrap_or_else(|_| {
+            [
+                "pet_size = 96",
+                "enable_typing_detection = false",
+                "click_through_in_games = true",
+                "",
+            ]
+            .join("\n")
+        });
+        let mut found = false;
+        let mut lines = Vec::new();
+        for existing in text.lines() {
+            let key = existing.split('#').next().unwrap_or("").trim();
+            let key_name = key.split_once('=').map(|(name, _)| name.trim()).unwrap_or("");
+            if key_name == "pet_directory" {
+                lines.push(line.clone());
+                found = true;
+            } else {
+                lines.push(existing.to_string());
+            }
+        }
+        if !found {
+            lines.push(line);
+        }
+        fs::write(path, lines.join("\n") + "\n").is_ok()
+    }
+
+    fn prepare_import_folders() {
+        let _ = fs::create_dir_all(imports_dir());
+        write_folder_readme(&pets_dir(), "Put converted pet folders here. The app loads local pet packages from this folder.");
+        write_folder_readme(&imports_dir(), "Drop source pet folders or image files here, then use petmui Settings to import them.");
+    }
+
+    fn find_first_import_pet_folder() -> Option<PathBuf> {
+        fs::read_dir(imports_dir())
+            .ok()?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| path.is_dir() && looks_like_pet_source(path))
+    }
+
+    fn looks_like_pet_source(path: &PathBuf) -> bool {
+        path.join("pet.json").is_file()
+            || path.join("spritesheet.png").is_file()
+            || path.join("spritesheet.webp").is_file()
+            || path.join("final").join("spritesheet.png").is_file()
+            || path.join("final").join("spritesheet.webp").is_file()
+    }
+
+    fn find_first_import_image() -> Option<PathBuf> {
+        fs::read_dir(imports_dir())
+            .ok()?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.is_file()
+                    && path
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "png" | "webp" | "jpg" | "jpeg" | "bmp" | "gif"))
+                        .unwrap_or(false)
+            })
+    }
+
+    fn next_package_dir(prefix: &str) -> PathBuf {
+        let root = pets_dir();
+        for index in 1..1000 {
+            let name = if index == 1 {
+                prefix.to_string()
+            } else {
+                format!("{prefix}-{index}")
+            };
+            let candidate = root.join(name);
+            if !candidate.exists() {
+                return candidate;
+            }
+        }
+        root.join(format!("{prefix}-999"))
+    }
+
+    fn converter_script() -> Option<PathBuf> {
+        let packaged = app_base_dir().join("tools").join("convert_hatch_pet.py");
+        if packaged.is_file() {
+            return Some(packaged);
+        }
+        let local = std::env::current_dir().ok()?.join("tools").join("convert_hatch_pet.py");
+        if local.is_file() {
+            Some(local)
+        } else {
+            None
+        }
+    }
+
+    fn config_path() -> PathBuf {
+        app_base_dir().join("config.toml")
+    }
+
+    unsafe fn read_control_text(hwnd: Hwnd, id: usize) -> String {
+        let mut buf = [0u16; 256];
+        let len = GetDlgItemTextW(hwnd, id as i32, buf.as_mut_ptr(), buf.len() as i32);
+        String::from_utf16_lossy(&buf[..len as usize])
+    }
+
+    unsafe fn show_message(hwnd: Hwnd, text: &str) {
+        MessageBoxW(hwnd, wide(text).as_ptr(), wide("petmui").as_ptr(), MB_OK);
     }
 
     fn load_config() -> Config {
@@ -1151,8 +1531,12 @@ mod windows_app {
 
     fn load_pet_package(config: &Config) -> Option<PetPackage> {
         let directory = config.pet_directory.as_ref()?;
+        let pets_root = pets_dir().canonicalize().ok()?;
         let directory = directory.canonicalize().ok()?;
         if !directory.is_dir() {
+            return None;
+        }
+        if !directory.starts_with(&pets_root) {
             return None;
         }
         let manifest_path = directory.join("pet.json");

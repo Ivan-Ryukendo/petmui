@@ -1,10 +1,12 @@
 # Desktop Pet Roadmap
 
-## v0.1 Native Companion
+## Current Beta Native Companion
 
 - Tiny Windows-first native app.
 - Transparent always-on-top pet window.
 - Tray controls for pause, hide/show, and exit.
+- Native Settings window for local folder access, staged pet imports, image imports, and emoji/text pet creation.
+- Local custom pets are copied into the app-owned `pets/` folder and remain ignored by Git.
 - Offline activity detection:
   - typing without text capture
   - foreground coding tools/agents
