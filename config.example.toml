@@ -5,11 +5,12 @@ pet_size = 96
 
 # Optional external pet package directory. Relative paths are resolved from
 # this config.toml file when possible. If loading fails, the built-in pet is used.
+# The tray's Open Pets Folder and Open Import Folder actions create/open local folders.
 # pet_directory = "pets/default"
 
 # Privacy control. When false, the app will not install the low-level keyboard
 # hook and will only use Windows idle/activity timing.
-enable_typing_detection = true
+enable_typing_detection = false
 
 # Game overlay control. When a configured game is foreground, the pet becomes
 # click-through so it can stay visible without catching FPS/game mouse input.

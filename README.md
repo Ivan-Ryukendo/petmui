@@ -26,11 +26,11 @@ cargo run
 
 - Draws a transparent desktop pet using raw Win32 APIs and no runtime framework.
 - Lets you drag the pet around the desktop.
-- Adds a tray icon with pause, hide/show, reload pet, settings folder, and exit actions.
+- Adds a tray icon with pause, hide/show, reload pet, settings folder, pets folder, import folder, and exit actions.
 - Detects recent input without recording typed text.
 - Detects foreground coding-agent/tool processes, game processes, and offline music processes, including Pear Desktop/YouTube Music by default.
 - Resolves states with simple priority: gaming, agent work, recent input, music, sleep, idle.
-- Reads an optional `config.toml` placed next to the executable or in the working directory.
+- Reads an optional `config.toml` placed next to the executable.
 - Can load an optional external pet package from `pet_directory`, falling back to the built-in procedural pet if the package is missing or invalid.
 - Can switch into click-through overlay mode during configured games, so the pet does not capture mouse input.
 
@@ -81,6 +81,24 @@ cellWidth * columns * cellHeight * rows.length * 4
 
 The renderer nearest-neighbor scales the selected cell into the configured `pet_size` window. Hatch-pet's 192x208 cells and row names are supported by this layout.
 
+For a single still image, petmui also supports a static package:
+
+```text
+pets/static-pet/
+  pet.json
+  image.bgra
+```
+
+```json
+{
+  "name": "Static Pet",
+  "renderer": "static-bgra-v1",
+  "image": "image.bgra",
+  "width": 192,
+  "height": 192
+}
+```
+
 To convert a hatch-pet package into this runtime format:
 
 ```powershell
@@ -98,6 +116,20 @@ To import a Codex pet and write a matching `config.toml` in one step:
 ```powershell
 python tools\convert_hatch_pet.py <path-to-codex-pet-folder> pets\your-pet --write-config config.toml
 ```
+
+To import a single image as a static pet:
+
+```powershell
+python tools\convert_hatch_pet.py path\to\image.png pets\image-pet --static --write-config config.toml
+```
+
+To render local emoji/text into a static pet package:
+
+```powershell
+python tools\convert_hatch_pet.py --emoji "star" pets\star-pet --write-config config.toml
+```
+
+Emoji rendering uses Pillow and local fonts only. On Windows it tries Segoe UI Emoji first; if Pillow or the installed font cannot render a color emoji cleanly, save the emoji as an image from another local tool and use the `--static` image import path instead. No converter mode makes network calls.
 
 Do not commit local imported pets. The repository ignores `pets/` and `config.toml` so private/custom pets stay local.
 
@@ -190,7 +222,7 @@ For best results, use ChatGPT to develop the character concept and Codex with `h
 
 ## Privacy
 
-The app does not record keystrokes, screenshots, clipboard contents, or network traffic. Keyboard detection only increments an in-memory counter from Windows key events so the pet can react to active typing. The keyboard hook is disabled while the pet is paused or hidden, and you can set `enable_typing_detection = false` to avoid installing it entirely. Spotify OAuth is intentionally not included in v0.1; music detection is offline process-based fallback.
+The app does not record keystrokes, screenshots, clipboard contents, or network traffic. Keyboard detection is off by default; when `enable_typing_detection = true`, it only increments an in-memory counter from Windows key events so the pet can react to active typing. The keyboard hook is disabled while the pet is paused or hidden. Foreground process names and limited window titles are read locally for state detection and are not stored or transmitted. Spotify OAuth is intentionally not included in v0.1; music detection is offline process-based fallback.
 
 For games, set `click_through_in_games = true` and add game executable names under `game_processes`. When one of those games is foreground, the pet stays visible but allows mouse input to pass through to the game.
 

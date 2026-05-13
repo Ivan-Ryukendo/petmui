@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 
 try:
-    from PIL import Image
+    from PIL import Image, ImageDraw, ImageFont
 except ImportError as exc:
     raise SystemExit("Pillow is required: python -m pip install pillow") from exc
 
@@ -100,11 +100,86 @@ def write_config(config_path: Path, pet_dir: Path) -> None:
     )
 
 
+def fit_static_image(image: Image.Image, size: int) -> Image.Image:
+    image = image.convert("RGBA")
+    scale = min(size / image.width, size / image.height)
+    width = max(1, round(image.width * scale))
+    height = max(1, round(image.height * scale))
+    resampling = getattr(Image, "Resampling", Image).LANCZOS
+    image = image.resize((width, height), resampling)
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    canvas.alpha_composite(image, ((size - width) // 2, (size - height) // 2))
+    return canvas
+
+
+def default_emoji_font(size: int, requested: str | None) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    candidates = []
+    if requested:
+        candidates.append(Path(requested))
+    candidates.extend(
+        [
+            Path("C:/Windows/Fonts/seguiemj.ttf"),
+            Path("C:/Windows/Fonts/seguisym.ttf"),
+            Path("C:/Windows/Fonts/arial.ttf"),
+        ]
+    )
+    for path in candidates:
+        if path.exists():
+            try:
+                return ImageFont.truetype(str(path), size)
+            except OSError:
+                pass
+    return ImageFont.load_default()
+
+
+def render_text_image(text: str, size: int, font_path: str | None) -> Image.Image:
+    image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    font = default_emoji_font(max(12, int(size * 0.72)), font_path)
+    try:
+        bbox = draw.textbbox((0, 0), text, font=font, embedded_color=True)
+    except TypeError:
+        bbox = draw.textbbox((0, 0), text, font=font)
+    x = (size - (bbox[2] - bbox[0])) // 2 - bbox[0]
+    y = (size - (bbox[3] - bbox[1])) // 2 - bbox[1]
+    try:
+        draw.text((x, y), text, font=font, embedded_color=True, fill=(255, 255, 255, 255))
+    except TypeError:
+        draw.text((x, y), text, font=font, fill=(255, 255, 255, 255))
+    return image
+
+
+def write_static_package(output: Path, image: Image.Image, name: str, write_config_path: Path | None) -> None:
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "image.bgra").write_bytes(image.tobytes("raw", "BGRA"))
+    manifest = {
+        "name": name,
+        "renderer": "static-bgra-v1",
+        "image": "image.bgra",
+        "width": image.width,
+        "height": image.height,
+    }
+    (output / "pet.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    if write_config_path:
+        write_config(write_config_path.resolve(), output)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("source", type=Path, help="hatch-pet package directory or spritesheet image")
-    parser.add_argument("output", type=Path, help="output pet package directory")
+    parser.add_argument("source", type=Path, nargs="?", help="hatch-pet package directory, spritesheet image, or static output when --emoji is used")
+    parser.add_argument("output", type=Path, nargs="?", help="output pet package directory")
     parser.add_argument("--name", help="display name for the converted pet")
+    parser.add_argument(
+        "--static",
+        action="store_true",
+        help="import source as a single static image instead of a spritesheet",
+    )
+    parser.add_argument(
+        "--emoji",
+        help="render emoji/text into a static pet package; Pillow/font support controls color emoji quality",
+    )
+    parser.add_argument("--static-size", type=int, default=192, help="square pixel size for static image packages")
+    parser.add_argument("--font", help="optional TrueType/OpenType font path for --emoji rendering")
     parser.add_argument("--cell-width", type=int, default=192)
     parser.add_argument("--cell-height", type=int, default=208)
     parser.add_argument("--columns", type=int, default=8)
@@ -120,8 +195,33 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.static_size <= 0:
+        raise SystemExit("--static-size must be greater than zero")
+
+    if args.emoji:
+        if args.output is None and args.source is not None:
+            output = args.source.resolve()
+        elif args.output is not None:
+            output = args.output.resolve()
+        else:
+            raise SystemExit("Output directory is required when using --emoji")
+        image = render_text_image(args.emoji, args.static_size, args.font)
+        write_static_package(output, image, args.name or args.emoji, args.write_config)
+        print(f"Wrote {output}")
+        return
+
+    if args.source is None or args.output is None:
+        raise SystemExit("Source and output are required")
+
     source = args.source.resolve()
     output = args.output.resolve()
+
+    if args.static:
+        image = fit_static_image(Image.open(source), args.static_size)
+        write_static_package(output, image, args.name or read_source_name(source), args.write_config)
+        print(f"Wrote {output}")
+        return
+
     spritesheet = find_spritesheet(source)
 
     image = Image.open(spritesheet).convert("RGBA")

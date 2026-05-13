@@ -43,6 +43,29 @@ jobs:
           Copy-Item tools/convert_hatch_pet.py dist/tools/convert_hatch_pet.py
           Get-FileHash dist/pet.exe -Algorithm SHA256 | ForEach-Object { "$($_.Hash)  pet.exe" } | Set-Content dist/SHA256SUMS.txt
 
+      - name: Privacy scan package
+        shell: pwsh
+        run: |
+          $patterns = @(
+            'C:\\Users\\',
+            '\.codex\\pets',
+            '\.codex/pets',
+            'E:\\',
+            'gamal',
+            'shefa'
+          )
+          $files = Get-ChildItem dist -Recurse -File | Where-Object {
+            $_.Extension -in @('.txt', '.md', '.toml', '.json', '.py', '.ps1', '.yml', '.yaml')
+          }
+          foreach ($file in $files) {
+            $text = Get-Content -Raw -LiteralPath $file.FullName
+            foreach ($pattern in $patterns) {
+              if ($text -match $pattern) {
+                throw "Privacy scan failed: $($file.FullName) matched $pattern"
+              }
+            }
+          }
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

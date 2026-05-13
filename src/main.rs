@@ -10,7 +10,7 @@ mod windows_app {
     use std::ffi::c_void;
     use std::fs;
     use std::mem::{size_of, zeroed};
-    use std::path::PathBuf;
+    use std::path::{Component, PathBuf};
     use std::ptr::{null, null_mut};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, Instant};
@@ -53,6 +53,7 @@ mod windows_app {
 
     const HTCAPTION: Wparam = 2;
     const SW_HIDE: i32 = 0;
+    const SW_SHOWNORMAL: i32 = 1;
     const SW_SHOWNOACTIVATE: i32 = 4;
     const SWP_NOSIZE: Uint = 0x0001;
     const SWP_NOMOVE: Uint = 0x0002;
@@ -82,7 +83,9 @@ mod windows_app {
     const ID_TRAY_HIDE: usize = 1002;
     const ID_TRAY_RELOAD: usize = 1003;
     const ID_TRAY_SETTINGS: usize = 1004;
-    const ID_TRAY_EXIT: usize = 1005;
+    const ID_TRAY_PETS_FOLDER: usize = 1005;
+    const ID_TRAY_IMPORTS_FOLDER: usize = 1006;
+    const ID_TRAY_EXIT: usize = 1007;
     const TIMER_RENDER: Wparam = 42;
 
     const WH_KEYBOARD_LL: i32 = 13;
@@ -91,6 +94,11 @@ mod windows_app {
     const PROCESS_QUERY_LIMITED_INFORMATION: Dword = 0x1000;
     const TH32CS_SNAPPROCESS: Dword = 0x00000002;
     const INVALID_HANDLE_VALUE: Handle = -1isize as Handle;
+    const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
+    const MAX_ATLAS_BYTES: usize = 64 * 1024 * 1024;
+    const MAX_CELL_DIMENSION: i32 = 512;
+    const MAX_COLUMNS: usize = 32;
+    const MAX_ROWS: usize = 64;
 
     static KEY_EVENTS: AtomicU64 = AtomicU64::new(0);
     static mut APP: *mut App = null_mut();
@@ -315,7 +323,7 @@ mod windows_app {
             Self {
                 pet_size: 96,
                 pet_directory: None,
-                enable_typing_detection: true,
+                enable_typing_detection: false,
                 click_through_in_games: true,
                 typing_timeout: Duration::from_secs(2),
                 sleep_timeout: Duration::from_secs(300),
@@ -689,6 +697,8 @@ mod windows_app {
                         ID_TRAY_HIDE => (*APP).toggle_hidden(),
                         ID_TRAY_RELOAD => (*APP).reload_config_and_pet(),
                         ID_TRAY_SETTINGS => open_settings_folder(hwnd),
+                        ID_TRAY_PETS_FOLDER => open_pets_folder(hwnd),
+                        ID_TRAY_IMPORTS_FOLDER => open_imports_folder(hwnd),
                         ID_TRAY_EXIT => {
                             KillTimer(hwnd, TIMER_RENDER);
                             PostQuitMessage(0);
@@ -978,6 +988,8 @@ mod windows_app {
         AppendMenuW(menu, MF_STRING, ID_TRAY_HIDE, wide(if hidden { "Show" } else { "Hide" }).as_ptr());
         AppendMenuW(menu, MF_STRING, ID_TRAY_RELOAD, wide("Reload Pet").as_ptr());
         AppendMenuW(menu, MF_STRING, ID_TRAY_SETTINGS, wide("Open Settings Folder").as_ptr());
+        AppendMenuW(menu, MF_STRING, ID_TRAY_PETS_FOLDER, wide("Open Pets Folder").as_ptr());
+        AppendMenuW(menu, MF_STRING, ID_TRAY_IMPORTS_FOLDER, wide("Open Import Folder").as_ptr());
         AppendMenuW(menu, MF_SEPARATOR, 0, null());
         AppendMenuW(menu, MF_STRING, ID_TRAY_EXIT, wide("Exit").as_ptr());
 
@@ -989,16 +1001,51 @@ mod windows_app {
     }
 
     unsafe fn open_settings_folder(hwnd: Hwnd) {
-        let folder = app_base_dir();
-        let folder = folder.to_string_lossy();
-        ShellExecuteW(hwnd, wide("open").as_ptr(), wide(&folder).as_ptr(), null(), null(), SW_SHOWNOACTIVATE);
+        open_folder_in_explorer(hwnd, app_base_dir(), false);
+    }
+
+    unsafe fn open_pets_folder(hwnd: Hwnd) {
+        let folder = pets_dir();
+        let _ = fs::create_dir_all(imports_dir());
+        write_folder_readme(&folder, "Put converted pet folders here. Use tools\\convert_hatch_pet.py to convert Codex pets, spritesheets, images, or emoji into petmui packages.");
+        open_folder_in_explorer(hwnd, folder, true);
+    }
+
+    unsafe fn open_imports_folder(hwnd: Hwnd) {
+        let folder = imports_dir();
+        write_folder_readme(&folder, "Drop custom PNG, WebP, JPEG, BMP, or GIF files here. Convert one with tools\\convert_hatch_pet.py <image> ..\\your-pet --static --write-config ..\\..\\config.toml, then Reload Pet.");
+        open_folder_in_explorer(hwnd, folder, true);
+    }
+
+    unsafe fn open_folder_in_explorer(hwnd: Hwnd, folder: PathBuf, create: bool) {
+        if create && fs::create_dir_all(&folder).is_err() {
+            return;
+        }
+        let Ok(folder) = folder.canonicalize() else {
+            return;
+        };
+        if !folder.is_dir() {
+            return;
+        }
+        let operation = wide("open");
+        let explorer = wide("explorer.exe");
+        let params = wide(&folder.to_string_lossy());
+        let cwd = app_base_dir();
+        let cwd = wide(&cwd.to_string_lossy());
+        ShellExecuteW(
+            hwnd,
+            operation.as_ptr(),
+            explorer.as_ptr(),
+            params.as_ptr(),
+            cwd.as_ptr(),
+            SW_SHOWNORMAL,
+        );
     }
 
     fn load_config() -> Config {
         let mut config = Config::default();
         let mut candidates = Vec::new();
         candidates.push(app_base_dir().join("config.toml"));
-        candidates.push(PathBuf::from("config.toml"));
 
         let loaded = candidates
             .into_iter()
@@ -1028,6 +1075,24 @@ mod windows_app {
             .ok()
             .and_then(|path| path.parent().map(PathBuf::from))
             .unwrap_or_else(|| PathBuf::from("."))
+    }
+
+    fn pets_dir() -> PathBuf {
+        app_base_dir().join("pets")
+    }
+
+    fn imports_dir() -> PathBuf {
+        pets_dir().join("imports")
+    }
+
+    fn write_folder_readme(folder: &PathBuf, text: &str) {
+        if fs::create_dir_all(folder).is_err() {
+            return;
+        }
+        let path = folder.join("README.txt");
+        if !path.exists() {
+            let _ = fs::write(path, text);
+        }
     }
 
     fn apply_config_value(config: &mut Config, key: &str, value: &str, full_text: &str, base_dir: Option<&PathBuf>) {
@@ -1086,8 +1151,20 @@ mod windows_app {
 
     fn load_pet_package(config: &Config) -> Option<PetPackage> {
         let directory = config.pet_directory.as_ref()?;
-        let manifest = fs::read_to_string(directory.join("pet.json")).ok()?;
-        if json_string(&manifest, "renderer")? != "raw-bgra-atlas-v1" {
+        let directory = directory.canonicalize().ok()?;
+        if !directory.is_dir() {
+            return None;
+        }
+        let manifest_path = directory.join("pet.json");
+        if fs::metadata(&manifest_path).ok()?.len() > MAX_MANIFEST_BYTES {
+            return None;
+        }
+        let manifest = fs::read_to_string(manifest_path).ok()?;
+        let renderer = json_string(&manifest, "renderer")?;
+        if renderer == "static-bgra-v1" {
+            return load_static_pet_package(&directory, &manifest);
+        }
+        if renderer != "raw-bgra-atlas-v1" {
             return None;
         }
 
@@ -1096,14 +1173,30 @@ mod windows_app {
         let cell_height = json_i32(&manifest, "cellHeight")?;
         let columns = json_usize(&manifest, "columns")?;
         let rows = json_string_array(&manifest, "rows");
-        if cell_width <= 0 || cell_height <= 0 || columns == 0 || rows.is_empty() {
+        if cell_width <= 0
+            || cell_width > MAX_CELL_DIMENSION
+            || cell_height <= 0
+            || cell_height > MAX_CELL_DIMENSION
+            || columns == 0
+            || columns > MAX_COLUMNS
+            || rows.is_empty()
+            || rows.len() > MAX_ROWS
+        {
             return None;
         }
 
-        let bytes = fs::read(directory.join(atlas)).ok()?;
         let width = cell_width as usize * columns;
         let height = cell_height as usize * rows.len();
-        if bytes.len() != width.checked_mul(height)?.checked_mul(4)? {
+        let expected = width.checked_mul(height)?.checked_mul(4)?;
+        if expected > MAX_ATLAS_BYTES {
+            return None;
+        }
+        let atlas_path = contained_package_file(&directory, &atlas)?;
+        if fs::metadata(&atlas_path).ok()?.len() != expected as u64 {
+            return None;
+        }
+        let bytes = fs::read(atlas_path).ok()?;
+        if bytes.len() != expected {
             return None;
         }
 
@@ -1119,6 +1212,61 @@ mod windows_app {
             rows: rows.into_iter().map(|row| row.to_ascii_lowercase()).collect(),
             pixels,
         })
+    }
+
+    fn load_static_pet_package(directory: &PathBuf, manifest: &str) -> Option<PetPackage> {
+        let image = json_string(manifest, "image").unwrap_or_else(|| "image.bgra".into());
+        let width = json_i32(manifest, "width")?;
+        let height = json_i32(manifest, "height")?;
+        if width <= 0 || width > MAX_CELL_DIMENSION || height <= 0 || height > MAX_CELL_DIMENSION {
+            return None;
+        }
+
+        let expected = (width as usize).checked_mul(height as usize)?.checked_mul(4)?;
+        if expected > MAX_ATLAS_BYTES {
+            return None;
+        }
+        let image_path = contained_package_file(directory, &image)?;
+        if fs::metadata(&image_path).ok()?.len() != expected as u64 {
+            return None;
+        }
+        let bytes = fs::read(image_path).ok()?;
+        if bytes.len() != expected {
+            return None;
+        }
+
+        let pixels = bytes
+            .chunks_exact(4)
+            .map(|px| u32::from_le_bytes([px[0], px[1], px[2], px[3]]))
+            .collect();
+
+        Some(PetPackage {
+            cell_width: width,
+            cell_height: height,
+            columns: 1,
+            rows: vec!["idle".into()],
+            pixels,
+        })
+    }
+
+    fn contained_package_file(directory: &PathBuf, name: &str) -> Option<PathBuf> {
+        let relative = PathBuf::from(name);
+        if relative.is_absolute()
+            || relative.components().any(|component| {
+                matches!(
+                    component,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
+            })
+        {
+            return None;
+        }
+        let candidate = directory.join(relative).canonicalize().ok()?;
+        if candidate.starts_with(directory) && candidate.is_file() {
+            Some(candidate)
+        } else {
+            None
+        }
     }
 
     fn parse_string(value: &str) -> Option<String> {
